@@ -1,4 +1,6 @@
-import React, { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
 const SIZE_PRESETS = {
   small: { label: "Small", words: 8, grid: 12 },
@@ -1691,6 +1693,157 @@ function HighlightLine({ item, color, width = 0.54 }) {
   );
 }
 
+function PrintablePuzzlePage({
+  pageRef,
+  grid,
+  placedWords,
+  wordBank,
+  showAnswerKey = false,
+  answerLineColor = "rgba(59, 130, 246, 0.35)",
+}) {
+  if (!grid.length) return null;
+
+  const sortedBank = [...wordBank].sort((a, b) => a.localeCompare(b));
+  const gridSize = grid.length;
+
+  const fontSize =
+    gridSize <= 12 ? "24px" :
+    gridSize <= 18 ? "19px" :
+    "15px";
+
+  return (
+    <div
+      ref={pageRef}
+      className="print-page"
+      style={{
+        width: "816px",
+        minHeight: "1056px",
+        background: "#ffffff",
+        color: "#111111",
+        padding: "36px",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        gap: "20px",
+      }}
+    >
+      {showAnswerKey && (
+        <div
+          style={{
+            fontSize: "18px",
+            fontWeight: 800,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          Answer Key
+        </div>
+      )}
+
+      <div
+        style={{
+          border: "1px solid #111",
+          padding: "12px",
+          borderRadius: "12px",
+        }}
+      >
+        <div
+          className="relative"
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+            border: "1px solid #ddd",
+            background: "#fff",
+          }}
+        >
+          <svg
+            className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+            viewBox={`0 0 ${gridSize} ${gridSize}`}
+            preserveAspectRatio="none"
+          >
+            {showAnswerKey &&
+              placedWords.map((item) => (
+                <HighlightLine
+                  key={item.word}
+                  item={item}
+                  color={answerLineColor}
+                  width={0.54}
+                />
+              ))}
+          </svg>
+
+          {grid.map((row, rowIndex) =>
+            row.map((letter, colIndex) => (
+              <div
+                key={`${rowIndex}-${colIndex}`}
+                style={{
+                  aspectRatio: "1 / 1",
+                  border: "1px solid #ddd",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 900,
+                  fontSize,
+                  lineHeight: 1,
+                  position: "relative",
+                  zIndex: 1,
+                  background: "#fff",
+                }}
+              >
+                {letter}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div
+        style={{
+          border: "1px solid #111",
+          borderRadius: "12px",
+          padding: "14px",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "14px",
+            fontWeight: 800,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            marginBottom: "12px",
+          }}
+        >
+          Word Bank
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: "8px 14px",
+          }}
+        >
+          {sortedBank.map((word) => (
+            <div
+              key={word}
+              style={{
+                fontSize: "14px",
+                fontWeight: 700,
+                textAlign: "center",
+                padding: "6px 8px",
+                border: "1px solid #ccc",
+                borderRadius: "10px",
+              }}
+            >
+              {word}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WordSearchGen() {
   const [mode, setMode] = useState("custom");
   const [customText, setCustomText] = useState("apple, banana, orange, grape, pear, melon, peach, berry");
@@ -1714,13 +1867,10 @@ export default function WordSearchGen() {
   const [isSelecting, setIsSelecting] = useState(false);
 
   const gridRef = useRef(null);
+  const exportPuzzleRef = useRef(null);
+  const exportAnswerRef = useRef(null);
   const sizePreset = SIZE_PRESETS[sizeKey];
   const theme = THEMES[themeName];
-
-  const allCategories = useMemo(
-    () => Object.values(CATEGORY_GROUPS).flatMap((items) => items),
-    []
-  );
 
   const selectedLine = useMemo(() => {
     if (!selectionStart || !selectionEnd) return null;
@@ -1758,17 +1908,13 @@ export default function WordSearchGen() {
     const maxWords = sizePreset.words;
     const maxLength = sizePreset.grid;
 
-    let words = [];
-    let rejected = [];
-
-    if (mode === "custom") {
-      const result = cleanWords(customText, maxWords, maxLength);
-      words = result.words;
-      rejected = result.rejected;
-    } else {
-      words = wordsForCategory(category, maxWords, maxLength);
-      rejected = [];
-    }
+    const { words, rejected } =
+      mode === "custom"
+        ? cleanWords(customText, maxWords, maxLength)
+        : {
+            words: wordsForCategory(category, maxWords, maxLength),
+            rejected: [],
+          };
 
     setRejectedWords(rejected);
 
@@ -1813,6 +1959,87 @@ export default function WordSearchGen() {
     setSelectionStart(null);
     setSelectionEnd(null);
     setIsSelecting(false);
+  }
+
+  async function captureElement(element) {
+    if (!element) return null;
+
+    return await html2canvas(element, {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+    });
+  }
+
+  function triggerDownload(dataUrl, filename) {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = filename;
+    link.click();
+  }
+
+  async function handleDownloadPng() {
+    if (!grid.length) return;
+
+    const targets = [
+      { ref: exportPuzzleRef, filename: "wordsearchgen-puzzle.png" },
+      { ref: exportAnswerRef, filename: "wordsearchgen-answer-key.png" },
+    ];
+
+    for (const target of targets) {
+      const canvas = await captureElement(target.ref.current);
+      if (!canvas) continue;
+      triggerDownload(canvas.toDataURL("image/png"), target.filename);
+    }
+  }
+
+  async function handleDownloadPdf() {
+    if (!grid.length) return;
+
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "pt",
+      format: "letter",
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 24;
+    const usableWidth = pageWidth - margin * 2;
+    const usableHeight = pageHeight - margin * 2;
+
+    const refs = [exportPuzzleRef, exportAnswerRef];
+
+    for (let i = 0; i < refs.length; i += 1) {
+      const canvas = await captureElement(refs[i].current);
+      if (!canvas) continue;
+
+      const imgData = canvas.toDataURL("image/png");
+      const ratio = Math.min(
+        usableWidth / canvas.width,
+        usableHeight / canvas.height
+      );
+
+      const renderWidth = canvas.width * ratio;
+      const renderHeight = canvas.height * ratio;
+      const x = (pageWidth - renderWidth) / 2;
+      const y = margin;
+
+      if (i > 0) pdf.addPage();
+
+      pdf.addImage(
+        imgData,
+        "PNG",
+        x,
+        y,
+        renderWidth,
+        renderHeight,
+        undefined,
+        "FAST"
+      );
+    }
+
+    pdf.save("wordsearchgen.pdf");
   }
 
   function getCellFromPointer(event) {
@@ -1878,16 +2105,45 @@ export default function WordSearchGen() {
     <div className="min-h-screen p-4 sm:p-6 lg:p-8" style={{ background: theme.bg, color: theme.text }}>
       <style>{`
         @media print {
-          @page { size: portrait; margin: 0.45in; }
-          body { background: #fff !important; }
-          .no-print { display: none !important; }
-          .print-shell { padding: 0 !important; background: #fff !important; color: #111 !important; }
-          .print-area { width: 100% !important; max-width: 7.7in !important; margin: 0 auto !important; display: flex !important; flex-direction: column !important; gap: 0.22in !important; }
-          .grid-card { box-shadow: none !important; border: 1px solid #111 !important; background: #fff !important; padding: 0.12in !important; }
-          .word-bank-card { box-shadow: none !important; border: 1px solid #111 !important; background: #fff !important; padding: 0.16in !important; break-inside: avoid !important; page-break-inside: avoid !important; }
-          .word-bank-grid { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 0.08in 0.16in !important; }
-          .cell-button { color: #000 !important; background: #fff !important; border-color: #ddd !important; }
-          .screen-note { display: none !important; }
+          @page { 
+            size: letter portrait; 
+            margin: 0.5in; 
+          }
+
+          body { 
+            background: #fff !important; 
+          }
+
+          .no-print { 
+            display: none !important; 
+          }
+
+          .print-shell {
+            display: none !important;
+          }
+
+          .print-pack {
+            position: static !important;
+            left: auto !important;
+            top: auto !important;
+            width: auto !important;
+            display: block !important;
+          }
+
+          .print-page {
+            width: 100% !important;
+            min-height: auto !important;
+            padding: 0 !important;
+            margin: 0 0 0.35in 0 !important;
+            break-after: page;
+            page-break-after: always;
+            box-shadow: none !important;
+          }
+
+          .print-page:last-child {
+            break-after: auto;
+            page-break-after: auto;
+          }
         }
       `}</style>
 
@@ -1908,6 +2164,12 @@ export default function WordSearchGen() {
             </Button>
             <Button theme={theme} onClick={handleRegenerate}>
               Regenerate Layout
+            </Button>
+            <Button theme={theme} onClick={handleDownloadPng}>
+              Download PNG
+            </Button>
+            <Button theme={theme} onClick={handleDownloadPdf}>
+              Download PDF
             </Button>
             <Button theme={theme} onClick={() => window.print()}>
               Print
@@ -2182,6 +2444,35 @@ export default function WordSearchGen() {
             )}
           </main>
         </div>
+      </div>
+      <div
+        className="print-pack"
+        style={{
+          position: "absolute",
+          left: "-100000px",
+          top: 0,
+          width: "816px",
+        }}
+      >
+        {grid.length > 0 && (
+          <>
+            <PrintablePuzzlePage
+              pageRef={exportPuzzleRef}
+              grid={grid}
+              placedWords={placedWords}
+              wordBank={placedWords.map((item) => item.word)}
+              showAnswerKey={false}
+            />
+
+            <PrintablePuzzlePage
+              pageRef={exportAnswerRef}
+              grid={grid}
+              placedWords={placedWords}
+              wordBank={placedWords.map((item) => item.word)}
+              showAnswerKey={true}
+            />
+          </>
+        )}
       </div>
     </div>
   );
